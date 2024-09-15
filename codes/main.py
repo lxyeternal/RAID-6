@@ -16,6 +16,7 @@
 
 import sys
 import os
+import socket
 from pyfinite import ffield
 from raid6 import raid6_stripe, generate_parity, generate_q_parity, F
 from storage_manager import store_block, retrieve_block
@@ -89,12 +90,15 @@ def main():
 
     print("Data stored to nodes successfully.")
 
-    # Simulate failures
+    # Simulate failures and use the information during reconstruction
     failure_info = simulate_failures(len(stripes))
+    failure_type, failed_nodes_or_blocks = failure_info
 
     # Retrieve and reconstruct data
     reconstructed_blocks = []
+
     for stripe_index in range(len(stripes)):
+        data_blocks, parity_blocks, missing_indices = retrieve_data_blocks(stripe_index, block_size, failure_type, failed_nodes_or_blocks)
         data_blocks, parity_blocks, missing_indices = retrieve_data_blocks(stripe_index, block_size)
         if len(missing_indices) > 2:
             print(f"Cannot reconstruct stripe {stripe_index}: more than two missing blocks.")
@@ -114,13 +118,15 @@ def main():
     else:
         print("Warning: The restored file does not match the original file size.")
 
+
 def simulate_failures(num_stripes):
     print("Choose failure type:")
     print("A: Simulate disk failure (enter indices 0-7 for disks or parity)")
     print("B: Simulate data block corruption (enter block IDs)")
+    print("C: Automatically detect and repair node failures")
 
     while True:
-        choice = input("Enter 'A' for disk failure or 'B' for data block corruption: ").strip().upper()
+        choice = input("Enter 'A', 'B', or 'C': ").strip().upper()
         if choice == 'A':
             # Disk failure
             print("Available disks:")
@@ -175,8 +181,26 @@ def simulate_failures(num_stripes):
                         print("Invalid input. Please enter valid block IDs.")
                 except ValueError:
                     print("Invalid input. Please enter numeric block IDs.")
+
+
+        elif choice == 'C':
+            # Directly check node reachability
+            failed_nodes = []
+            for node in STORAGE_NODES:
+                try:
+                    with socket.create_connection((node['host'], node['port']), timeout=2):
+                        print(f"Node {node['name']} is reachable.")
+                except (socket.timeout, ConnectionRefusedError, OSError):
+                    print(f"Node {node['name']} is unreachable.")
+                    failed_nodes.append(node['name'])
+            if not failed_nodes:
+                print("No failed nodes detected.")
+            else:
+                print(f"Auto-detected failed nodes: {failed_nodes}")
+            return choice, failed_nodes
+
         else:
-            print("Invalid choice. Please enter 'A' or 'B'.")
+            print("Invalid choice. Please enter 'A', 'B', or 'C'.")
 
 def retrieve_data_blocks(stripe_index, block_size):
     data_blocks = []

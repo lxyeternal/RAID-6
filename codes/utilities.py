@@ -23,7 +23,8 @@ def read_file_to_blocks(file_path, block_size):
     # Pad the last block if necessary
     if len(blocks[-1]) < block_size:
         blocks[-1] += bytes(block_size - len(blocks[-1]))
-    return blocks
+    file_size = len(data)  # 计算文件的原始大小
+    return blocks, file_size  # 返回块列表和文件大小
 
 def write_blocks_to_file(blocks, file_path, original_size):
     """Writes a list of blocks to a file, trimming any padding."""

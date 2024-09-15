@@ -67,6 +67,9 @@ def handle_client(conn, addr):
                     conn.sendall(b'OK\n')
                 else:
                     conn.sendall(b'ERROR File not found\n')
+            elif command.startswith('PING'):
+                # Respond to PING with PONG
+                conn.sendall(b'PONG\n')
             else:
                 conn.sendall(b'ERROR Unknown command\n')
     finally:
