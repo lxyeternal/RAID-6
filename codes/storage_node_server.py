@@ -35,6 +35,8 @@ def handle_client(conn, addr):
                     if not packet:
                         break
                     data += packet
+                if not os.path.exists(STORAGE_DIR):
+                    os.makedirs(STORAGE_DIR)
                 with open(os.path.join(STORAGE_DIR, filename), 'wb') as f:
                     f.write(data)
                 conn.sendall(b'OK\n')
@@ -62,8 +64,6 @@ def handle_client(conn, addr):
         conn.close()
 
 def start_server(port):
-    if not os.path.exists(STORAGE_DIR):
-        os.makedirs(STORAGE_DIR)
     server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server_socket.bind(('', port))
     server_socket.listen(5)

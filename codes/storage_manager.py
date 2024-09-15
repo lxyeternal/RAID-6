@@ -12,37 +12,44 @@
 
 
 
-# codes/storage_manager.py
+# storage_manager.py
 
-import os
+import socket
 
-def store_to_nodes(stripes, storage_nodes, storage_dir):
-    """Stores data blocks and parity blocks to their respective nodes."""
-    node_files = {node: open(os.path.join(storage_dir, node), 'w') for node in storage_nodes}
+def send_command(host, port, command, data=None):
+    response = ''
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.connect((host, port))
+        s.sendall(command.encode('utf-8'))
+        if data:
+            s.sendall(data)
+        response = s.recv(1024).decode('utf-8').strip()
+    return response
 
-    for stripe_index, (data_blocks, p_parity, q_parity) in enumerate(stripes):
-        for i, block in enumerate(data_blocks):
-            node_name = f"node{i+1}"
-            node_files[node_name].write(block + '\n')
-        # Write parity blocks
-        node_files['parity1'].write(p_parity + '\n')
-        node_files['parity2'].write(q_parity + '\n')
+def store_block(node, filename, data):
+    host, port = node['host'], node['port']
+    command = f'STORE {filename} {len(data)}\n'
+    response = send_command(host, port, command, data)
+    if response != 'OK':
+        print(f'Error storing block {filename} on {node["name"]}: {response}')
 
-    # Close all files
-    for f in node_files.values():
-        f.close()
-
-def read_from_nodes(storage_nodes, storage_dir):
-    """Reads data from storage nodes."""
-    node_data = {node: [] for node in storage_nodes}
-
-    # Read data from each node file
-    for node in storage_nodes:
-        node_path = os.path.join(storage_dir, node)
-        if os.path.exists(node_path):
-            with open(node_path, 'r') as f:
-                node_data[node] = f.read().strip().split('\n')
+def retrieve_block(node, filename):
+    host, port = node['host'], node['port']
+    command = f'RETRIEVE {filename}\n'
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.connect((host, port))
+        s.sendall(command.encode('utf-8'))
+        response = s.recv(1024).decode('utf-8').strip()
+        if response.startswith('OK'):
+            _, filesize = response.split()
+            filesize = int(filesize)
+            data = b''
+            while len(data) < filesize:
+                packet = s.recv(4096)
+                if not packet:
+                    break
+                data += packet
+            return data
         else:
-            node_data[node] = None  # Node has failed
-
-    return node_data
+            print(f'Error retrieving block {filename} from {node["name"]}: {response}')
+            return None

@@ -12,23 +12,109 @@
 
 
 
-# codes/main.py
+# main.py
 
 import sys
+import os
 from pyfinite import ffield
-from raid6 import raid6_stripe, reconstruct_data, F
-from storage_manager import store_to_nodes, read_from_nodes
-from utilities import string_to_binary, binary_to_string, ensure_storage_dir, clean_storage_nodes
+from raid6 import raid6_stripe, generate_parity, generate_q_parity, F
+from storage_manager import store_block, retrieve_block
+from utilities import read_file_to_blocks, write_blocks_to_file
 
 # Storage configuration
 DATA_DISKS = 6
 PARITY_DISKS = 2
 TOTAL_DISKS = DATA_DISKS + PARITY_DISKS
-STORAGE_NODES = [f"node{i+1}" for i in range(DATA_DISKS)] + ["parity1", "parity2"]
-STORAGE_DIR = '../storage'  # Adjust the path as needed
+STORAGE_NODES = [
+    {'name': 'node1', 'host': 'localhost', 'port': 5001},
+    {'name': 'node2', 'host': 'localhost', 'port': 5002},
+    {'name': 'node3', 'host': 'localhost', 'port': 5003},
+    {'name': 'node4', 'host': 'localhost', 'port': 5004},
+    {'name': 'node5', 'host': 'localhost', 'port': 5005},
+    {'name': 'node6', 'host': 'localhost', 'port': 5006},
+    {'name': 'parity1', 'host': 'localhost', 'port': 5007},
+    {'name': 'parity2', 'host': 'localhost', 'port': 5008},
+]
 
-def simulate_failures(stripes):
-    """Simulates disk failures or data block corruption based on user input."""
+def main():
+    # Input file path
+    input_file = input("Enter the path to the input file: ").strip()
+    if not os.path.isfile(input_file):
+        print("Invalid file path.")
+        sys.exit(1)
+
+    # Get the block size from the user
+    while True:
+        block_size_input = input("Enter the block size (e.g., 1KB, 4MB): ").strip().upper()
+        if block_size_input.endswith('KB'):
+            block_size = int(block_size_input[:-2]) * 1024
+            break
+        elif block_size_input.endswith('MB'):
+            block_size = int(block_size_input[:-2]) * 1024 * 1024
+            break
+        else:
+            print("Invalid block size format. Please enter in KB or MB (e.g., 1KB, 4MB).")
+
+    # Read the input file and divide it into blocks
+    data_blocks = read_file_to_blocks(input_file, block_size)
+    original_file_size = os.path.getsize(input_file)
+    print(f"File '{input_file}' read successfully. Size: {original_file_size} bytes.")
+    print(f"Data divided into {len(data_blocks)} blocks of size {block_size} bytes.")
+
+    # Organize data blocks into stripes
+    stripes = []
+    for i in range(0, len(data_blocks), DATA_DISKS):
+        stripe_data_blocks = data_blocks[i:i+DATA_DISKS]
+        # Pad stripe if necessary
+        if len(stripe_data_blocks) < DATA_DISKS:
+            stripe_data_blocks += [bytes(block_size)] * (DATA_DISKS - len(stripe_data_blocks))
+        p_parity, q_parity = raid6_stripe(stripe_data_blocks)
+        stripes.append((stripe_data_blocks, p_parity, q_parity))
+
+    print(f"Total stripes created: {len(stripes)}")
+
+    # Store data blocks and parity blocks to storage nodes
+    for stripe_index, (data_blocks, p_parity, q_parity) in enumerate(stripes):
+        # Store data blocks
+        for i, block in enumerate(data_blocks):
+            node = STORAGE_NODES[i]
+            filename = f'stripe_{stripe_index}_block_{i}'
+            store_block(node, filename, block)
+        # Store parity blocks
+        parity_nodes = [STORAGE_NODES[-2], STORAGE_NODES[-1]]
+        parity_blocks = [p_parity, q_parity]
+        for node, parity_block in zip(parity_nodes, parity_blocks):
+            filename = f'stripe_{stripe_index}_parity'
+            store_block(node, filename, parity_block)
+
+    print("Data stored to nodes successfully.")
+
+    # Simulate failures
+    failure_info = simulate_failures(len(stripes))
+
+    # Retrieve and reconstruct data
+    reconstructed_blocks = []
+    for stripe_index in range(len(stripes)):
+        data_blocks, parity_blocks, missing_indices = retrieve_data_blocks(stripe_index, block_size)
+        if len(missing_indices) > 2:
+            print(f"Cannot reconstruct stripe {stripe_index}: more than two missing blocks.")
+            reconstructed_blocks.extend([bytes(block_size)] * DATA_DISKS)
+            continue
+        reconstructed_data_blocks = reconstruct_stripe(stripe_index, data_blocks, parity_blocks, missing_indices)
+        reconstructed_blocks.extend(reconstructed_data_blocks[:DATA_DISKS])
+
+    # Write the reconstructed data to the output file
+    output_file = 'restored_' + os.path.basename(input_file)
+    write_blocks_to_file(reconstructed_blocks, output_file, original_file_size)
+    print(f"Restored file saved as '{output_file}'.")
+
+    # Verify the restored file
+    if os.path.exists(output_file) and os.path.getsize(output_file) == original_file_size:
+        print("Success: The restored file matches the original file size.")
+    else:
+        print("Warning: The restored file does not match the original file size.")
+
+def simulate_failures(num_stripes):
     print("Choose failure type:")
     print("A: Simulate disk failure (enter indices 0-7 for disks or parity)")
     print("B: Simulate data block corruption (enter block IDs)")
@@ -39,7 +125,7 @@ def simulate_failures(stripes):
             # Disk failure
             print("Available disks:")
             for idx, node in enumerate(STORAGE_NODES):
-                print(f"{idx}: {node}")
+                print(f"{idx}: {node['name']}")
 
             while True:
                 try:
@@ -49,31 +135,30 @@ def simulate_failures(stripes):
                     else:
                         failed_indices = list(map(int, failed_nodes_input.strip().split()))
                     if len(failed_indices) <= 2 and all(0 <= idx < TOTAL_DISKS for idx in failed_indices):
-                        failed_node_names = [STORAGE_NODES[idx] for idx in failed_indices]
+                        failed_node_names = [STORAGE_NODES[idx]['name'] for idx in failed_indices]
                         print(f"Failed disks: {failed_node_names}")
                         return choice, failed_node_names
                     else:
-                        print("Invalid input. Please enter less three valid indices.")
+                        print("Invalid input. Please enter up to two valid indices.")
                 except ValueError:
                     print("Invalid input. Please enter numeric indices.")
         elif choice == 'B':
             # Data block corruption
-            # Display all block IDs with corresponding nodes and stripes
             block_list = []
             block_id = 0
             print("Available data blocks:")
-            for stripe_index, (data_blocks, p_parity, q_parity) in enumerate(stripes):
+            for stripe_index in range(num_stripes):
                 for i in range(DATA_DISKS):
-                    node_name = STORAGE_NODES[i]
+                    node_name = STORAGE_NODES[i]['name']
                     print(f"Block ID {block_id}: Stripe {stripe_index}, Node {node_name}, Data Block")
                     block_list.append((stripe_index, i, node_name, 'data'))
                     block_id += 1
                 # Parity blocks
-                print(f"Block ID {block_id}: Stripe {stripe_index}, Node parity1, P Parity")
-                block_list.append((stripe_index, 'parity1', 'parity1', 'P'))
+                print(f"Block ID {block_id}: Stripe {stripe_index}, Node {STORAGE_NODES[-2]['name']}, P Parity")
+                block_list.append((stripe_index, 'parity1', STORAGE_NODES[-2]['name'], 'P'))
                 block_id += 1
-                print(f"Block ID {block_id}: Stripe {stripe_index}, Node parity2, Q Parity")
-                block_list.append((stripe_index, 'parity2', 'parity2', 'Q'))
+                print(f"Block ID {block_id}: Stripe {stripe_index}, Node {STORAGE_NODES[-1]['name']}, Q Parity")
+                block_list.append((stripe_index, 'parity2', STORAGE_NODES[-1]['name'], 'Q'))
                 block_id += 1
 
             while True:
@@ -93,78 +178,97 @@ def simulate_failures(stripes):
         else:
             print("Invalid choice. Please enter 'A' or 'B'.")
 
-def apply_failures(node_data, failure_info):
-    """Applies the simulated failures to the node data."""
-    choice, failure_detail = failure_info
-    failed_nodes = set()
-    if choice == 'A':
-        failed_nodes.update(failure_detail)
-        # Remove failed nodes
-        for node in failed_nodes:
-            node_data[node] = None
-    elif choice == 'B':
-        for stripe_num, pos, node_name, block_type in failure_detail:
-            if block_type == 'data':
-                if node_data[node_name] is not None:
-                    node_data[node_name][stripe_num] = None
-                print(f"Corrupted data block at index {pos} in stripe {stripe_num}.")
-            elif block_type == 'P':
-                if node_data['parity1'] is not None:
-                    node_data['parity1'][stripe_num] = None
-                print(f"Corrupted P parity in stripe {stripe_num}.")
-            elif block_type == 'Q':
-                if node_data['parity2'] is not None:
-                    node_data['parity2'][stripe_num] = None
-                print(f"Corrupted Q parity in stripe {stripe_num}.")
-            failed_nodes.add(node_name)
-    return failed_nodes
+def retrieve_data_blocks(stripe_index, block_size):
+    data_blocks = []
+    missing_indices = []
+    for i in range(DATA_DISKS):
+        node = STORAGE_NODES[i]
+        filename = f'stripe_{stripe_index}_block_{i}'
+        block = retrieve_block(node, filename)
+        if block is None:
+            data_blocks.append(None)
+            missing_indices.append(i)
+        else:
+            data_blocks.append(block)
+    # Retrieve parity blocks
+    parity_blocks = []
+    for node in STORAGE_NODES[-2:]:
+        filename = f'stripe_{stripe_index}_parity'
+        block = retrieve_block(node, filename)
+        parity_blocks.append(block)
+    return data_blocks, parity_blocks, missing_indices
 
-def main():
-    ensure_storage_dir(STORAGE_DIR)
-    clean_storage_nodes(STORAGE_NODES, STORAGE_DIR)
+def reconstruct_stripe(stripe_index, data_blocks, parity_blocks, missing_indices):
+    p_parity, q_parity = parity_blocks
+    block_size = len(p_parity)
+    failed_disks_in_stripe = set(missing_indices)
 
-    # Input string
-    # original_string = "剣斉万里の長城、建来，Цзянь Лай, Меч Ци Великой Стены，Jianlai, 검기의 만리장성，使用这个修改后的代码,程序运行时会提示用户输入一个字符串,然后使用这个输入的字符串进行RAID6的模拟和数据恢复过程。这样,您就可以测试不同长度和内容的字符串在RAID6系统中的表现了，english"
-    original_string = input("Please input a string: ")
+    # Check if the number of failed disks in the stripe exceeds two
+    if len(failed_disks_in_stripe) > 2:
+        print(f"Cannot recover stripe {stripe_index}, more than two disks have failed.")
+        return [bytes(block_size)] * DATA_DISKS  # Placeholder zeros
 
-    # Convert string to binary
-    binary_data = string_to_binary(original_string)
-    print(f"Original string: {original_string}")
-    print(f"Binary data: {binary_data}")
+    num_missing_data = len(missing_indices)
+    if num_missing_data == 0:
+        # No data disks are missing
+        return data_blocks
 
-    # Perform RAID-6 striping and generate parity
-    stripes = raid6_stripe(binary_data)
-    print(f"\nData blocks and parity for each stripe:")
-    for idx, (data_blocks, p_parity, q_parity) in enumerate(stripes):
-        print(f"Stripe {idx}:")
-        print(f"  Data blocks: {data_blocks}")
-        print(f"  P Parity: {p_parity}")
-        print(f"  Q Parity: {q_parity}")
+    elif num_missing_data == 1:
+        # One data disk is missing
+        missing_index = missing_indices[0]
+        reconstructed_block = bytearray(block_size)
+        for j in range(block_size):
+            p_parity_byte = p_parity[j]
+            reconstructed_byte = p_parity_byte
+            for i, block in enumerate(data_blocks):
+                if i != missing_index and block is not None:
+                    reconstructed_byte ^= block[j]
+            reconstructed_block[j] = reconstructed_byte
+        data_blocks[missing_index] = bytes(reconstructed_block)
+        print(f"Reconstructed data block at index {missing_index} in stripe {stripe_index}")
+        return data_blocks
 
-    # Store data to nodes
-    store_to_nodes(stripes, STORAGE_NODES, STORAGE_DIR)
+    elif num_missing_data == 2:
+        # Two data disks are missing
+        m1, m2 = missing_indices
+        reconstructed_block1 = bytearray(block_size)
+        reconstructed_block2 = bytearray(block_size)
 
-    # Simulate failures
-    failure_info = simulate_failures(stripes)
+        for j in range(block_size):
+            p_parity_byte = p_parity[j]
+            q_parity_byte = q_parity[j]
 
-    # Read data from nodes
-    node_data = read_from_nodes(STORAGE_NODES, STORAGE_DIR)
+            sum_p = p_parity_byte
+            sum_q = q_parity_byte
 
-    # Apply failures to node data
-    failed_nodes = apply_failures(node_data, failure_info)
+            for idx, block in enumerate(data_blocks):
+                if idx != m1 and idx != m2 and block is not None:
+                    block_byte = block[j]
+                    sum_p ^= block_byte
+                    multiplier = idx + 1
+                    sum_q = F.Add(sum_q, F.Multiply(block_byte, multiplier))
 
-    # Rebuild data
-    restored_data_blocks = reconstruct_data(stripes, node_data, failed_nodes, F)
+            c1 = m1 + 1
+            c2 = m2 + 1
 
-    # Reconstruct the data
-    restored_binary_data = ''.join(restored_data_blocks)
-    restored_string = binary_to_string(restored_binary_data)
-    print(f"\nRestored string: {restored_string}")
+            coeff = F.Add(c1, c2)
+            rhs = F.Add(sum_q, F.Multiply(c2, sum_p))
+            if coeff == 0:
+                print(f"Cannot recover byte {j} in stripe {stripe_index}, equations cannot be solved.")
+                reconstructed_block1[j] = 0
+                reconstructed_block2[j] = 0
+                continue
 
-    # Output the restored data on all disks
-    print("\nRestored data on all disks:")
-    for idx, block in enumerate(restored_data_blocks):
-        print(f"Block {idx}: {block}")
+            D_m1_byte = F.Divide(rhs, coeff)
+            D_m2_byte = F.Add(D_m1_byte, sum_p)
+
+            reconstructed_block1[j] = D_m1_byte
+            reconstructed_block2[j] = D_m2_byte
+
+        data_blocks[m1] = bytes(reconstructed_block1)
+        data_blocks[m2] = bytes(reconstructed_block2)
+        print(f"Reconstructed data blocks at indices {m1} and {m2} in stripe {stripe_index}")
+        return data_blocks
 
 if __name__ == "__main__":
     main()
