@@ -107,8 +107,6 @@ This command builds a Docker image named storage_node using the Dockerfile.
 ### 3. Set Execute Permissions on Shell Scripts
 Return to the project root directory and set execute permissions on the shell scripts:
 
-### 3. Start Storage Nodes Using Docker Compose
-Return to the project root directory and start the storage node containers:
 ```bash
 cd ..
 chmod +x start_storage_nodes.sh stop_storage_nodes.sh
