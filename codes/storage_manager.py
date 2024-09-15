@@ -23,7 +23,14 @@ def send_command(host, port, command, data=None):
         s.sendall(command.encode('utf-8'))
         if data:
             s.sendall(data)
-        response = s.recv(1024).decode('utf-8').strip()
+        # Read response line
+        response_line = ''
+        while not response_line.endswith('\n'):
+            chunk = s.recv(1).decode('utf-8')
+            if not chunk:
+                break
+            response_line += chunk
+        response = response_line.strip()
     return response
 
 def store_block(node, filename, data):
@@ -39,13 +46,20 @@ def retrieve_block(node, filename):
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.connect((host, port))
         s.sendall(command.encode('utf-8'))
-        response = s.recv(1024).decode('utf-8').strip()
+        # Read response line
+        response_line = ''
+        while not response_line.endswith('\n'):
+            chunk = s.recv(1).decode('utf-8')
+            if not chunk:
+                break
+            response_line += chunk
+        response = response_line.strip()
         if response.startswith('OK'):
-            _, filesize = response.split()
-            filesize = int(filesize)
+            _, filesize_str = response.split()
+            filesize = int(filesize_str)
             data = b''
             while len(data) < filesize:
-                packet = s.recv(4096)
+                packet = s.recv(min(filesize - len(data), 4096))
                 if not packet:
                     break
                 data += packet

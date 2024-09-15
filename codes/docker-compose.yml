@@ -1,0 +1,42 @@
+version: '3'
+services:
+  node1:
+    image: storage_node
+    container_name: node1
+    ports:
+      - "5001:5000"
+  node2:
+    image: storage_node
+    container_name: node2
+    ports:
+      - "5002:5000"
+  node3:
+    image: storage_node
+    container_name: node3
+    ports:
+      - "5003:5000"
+  node4:
+    image: storage_node
+    container_name: node4
+    ports:
+      - "5004:5000"
+  node5:
+    image: storage_node
+    container_name: node5
+    ports:
+      - "5005:5000"
+  node6:
+    image: storage_node
+    container_name: node6
+    ports:
+      - "5006:5000"
+  parity1:
+    image: storage_node
+    container_name: parity1
+    ports:
+      - "5007:5000"
+  parity2:
+    image: storage_node
+    container_name: parity2
+    ports:
+      - "5008:5000"

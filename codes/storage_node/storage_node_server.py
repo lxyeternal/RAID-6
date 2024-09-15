@@ -20,10 +20,19 @@ import os
 
 STORAGE_DIR = 'storage'
 
+def recv_until_newline(conn):
+    data = b''
+    while True:
+        chunk = conn.recv(1)
+        if not chunk or chunk == b'\n':
+            break
+        data += chunk
+    return data.decode('utf-8').strip()
+
 def handle_client(conn, addr):
     try:
         while True:
-            command = conn.recv(1024).decode('utf-8').strip()
+            command = recv_until_newline(conn)
             if not command:
                 break
             if command.startswith('STORE'):
@@ -31,7 +40,7 @@ def handle_client(conn, addr):
                 filesize = int(filesize)
                 data = b''
                 while len(data) < filesize:
-                    packet = conn.recv(4096)
+                    packet = conn.recv(min(4096, filesize - len(data)))
                     if not packet:
                         break
                     data += packet
@@ -64,6 +73,8 @@ def handle_client(conn, addr):
         conn.close()
 
 def start_server(port):
+    if not os.path.exists(STORAGE_DIR):
+        os.makedirs(STORAGE_DIR)
     server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server_socket.bind(('', port))
     server_socket.listen(5)
